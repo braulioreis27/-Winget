@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wpm-cli"
+version = "1.0.0"
+description = "Gerenciador de pacotes para Windows baseado no winget"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "WPM" }]
+keywords = ["winget", "windows", "package-manager", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+]
+
+[project.scripts]
+wpm = "wpm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["wpm*"]
+
+[tool.setuptools]
+include-package-data = true
