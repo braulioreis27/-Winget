@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install build twine pyinstaller ruff
+
+      - name: Quality checks
+        run: |
+          ruff check .
+          python -m unittest discover -s tests -q
+          python -m compileall -q wpm tests run.py
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Build Windows executable with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller --onefile --name wpm --console --clean -m wpm.cli
+          $tag = "${{ github.ref_name }}"
+          Move-Item -Path "dist/wpm.exe" -Destination "dist/wpm-$tag-windows-x64.exe"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/wpm-*.exe
+          if-no-files-found: error
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/wpm-cli/
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+
+      - name: Publish package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+  publish-release:
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/wpm-*.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy-pages:
+    needs: [build, publish-pypi, publish-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build static documentation site
+        shell: bash
+        run: |
+          mkdir -p _site
+          cp README.md _site/index.md
+          python3 -m pip install --upgrade pip
+          pip install markdown
+          python3 -c "
+          import markdown, os
+          text = open('_site/index.md', encoding='utf-8').read()
+          html = markdown.markdown(text, extensions=['fenced_code','tables','toc','codehilite'])
+          page = '''<!DOCTYPE html>
+          <html lang=\\"pt-BR\\">
+          <head>
+            <meta charset=\\"utf-8\\">
+            <meta name=\\"viewport\\" content=\\"width=device-width, initial-scale=1\\">
+            <title>WPM - Gerenciador de pacotes para Windows</title>
+            <link rel=\\"stylesheet\\" href=\\"https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css\\">
+            <style>pre{overflow-x:auto}</style>
+          </head>
+          <body>
+            <main class=\\"container\\">
+          ''' + html + '''
+            </main>
+          </body>
+          </html>'''
+          open('_site/index.html','w',encoding='utf-8').write(page)
+          "
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
